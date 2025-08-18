@@ -1,62 +1,53 @@
-import time, requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time as t, requests as r
+from concurrent.futures import ThreadPoolExecutor as e, as_completed as c
 
-# ==== CONFIG ====
-API_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
-TASK_ID = 528
-REQUESTS_PER_BATCH = 100
-BATCHES_PER_ROUND = 1
-ROUND_DELAY = 5
-BALANCE_LIMIT = 100000
+a="https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
+b=528
+c1=100
+d=1
+e1=5
+f=100000
 
-# 🟡 Ask user to enter their x-init-data
-X_INIT_DATA = input("📥 Please enter your x-init-data:\n> ").strip()
+g=input("📥 Please enter your x-init-data:\n> ").strip()
 
-# 🟢 Simulated balance fetch (replace with actual API if needed)
-def get_balance():
+def h():
     return 1000
 
-# 🔁 Send a single request
-def send_task():
-    t = int(time.time())
-    data = {"taskId": TASK_ID, "taskContents": {"viewedTimes": 1, "lastViewed": t}}
-    headers = {
-        "Content-Type": "application/json",
-        "accept": "*/*",
-        "origin": "https://app.w-coin.io",
-        "referer": "https://app.w-coin.io/",
-        "user-agent": "Mozilla/5.0 (Linux; Android 13; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
-        "x-init-data": X_INIT_DATA,
-        "x-request-timestamp": str(t)
+def i():
+    x=int(t.time())
+    y={"taskId":b,"taskContents":{"viewedTimes":1,"lastViewed":x}}
+    z={
+        "Content-Type":"application/json",
+        "accept":"*/*",
+        "origin":"https://app.w-coin.io",
+        "referer":"https://app.w-coin.io/",
+        "user-agent":"Mozilla/5.0 (Linux; Android 13; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+        "x-init-data":g,
+        "x-request-timestamp":str(x)
     }
     try:
-        r = requests.post(API_URL, headers=headers, json=data, timeout=5)
-        print(f"[{t}] Status: {r.status_code} | {r.text}")
-    except Exception as e:
-        print(f"Request error: {e}")
+        res=r.post(a,headers=z,json=y,timeout=5)
+        print(f"[{x}] Status: {res.status_code} | {res.text}")
+    except Exception as ex:
+        print(f"Request error: {ex}")
 
-# 🔁 One batch
-def run_batch(batch_num):
-    print(f"  >> Starting batch {batch_num}")
-    with ThreadPoolExecutor(max_workers=REQUESTS_PER_BATCH) as ex:
-        futures = [ex.submit(send_task) for _ in range(REQUESTS_PER_BATCH)]
-        for _ in as_completed(futures): pass
-    print(f"  >> Finished batch {batch_num}")
+def j(k):
+    print(f"  >> Starting batch {k}")
+    with e(max_workers=c1) as ex:
+        futures=[ex.submit(i) for _ in range(c1)]
+        for _ in c(futures): pass
+    print(f"  >> Finished batch {k}")
 
-# 🔁 Main loop
 while True:
-    bal = get_balance()
-    if bal >= BALANCE_LIMIT:
-        print(f"Balance limit reached ({bal} >= {BALANCE_LIMIT}), stopping.")
+    l=h()
+    if l>=f:
+        print(f"Balance limit reached ({l} >= {f}), stopping.")
         break
-
-    print(f"\n=== New round: {BATCHES_PER_ROUND} batches of {REQUESTS_PER_BATCH} requests ===")
-    start = time.time()
-
-    with ThreadPoolExecutor(max_workers=BATCHES_PER_ROUND) as ex:
-        futures = [ex.submit(run_batch, i+1) for i in range(BATCHES_PER_ROUND)]
-        for _ in as_completed(futures): pass
-
-    print(f"=== Round completed in {time.time() - start:.2f} seconds ===")
-    print(f"Waiting {ROUND_DELAY} seconds before next round...\n")
-    time.sleep(ROUND_DELAY)
+    print(f"\n=== New round: {d} batches of {c1} requests ===")
+    m=t.time()
+    with e(max_workers=d) as ex:
+        futures=[ex.submit(j,i+1) for i in range(d)]
+        for _ in c(futures): pass
+    print(f"=== Round completed in {t.time()-m:.2f} seconds ===")
+    print(f"Waiting {e1} seconds before next round...\n")
+    t.sleep(e1)
