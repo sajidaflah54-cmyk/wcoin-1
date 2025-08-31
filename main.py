@@ -3,11 +3,11 @@ from concurrent.futures import ThreadPoolExecutor as e, as_completed as c
 
 a="https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
 b=528
-c1=100
+c1=1000
 d=1
-e1=5
+e1=10
 f=100000
-
+000
 g=input("📥 Please enter your x-init-data:\n> ").strip()
 
 def h():
