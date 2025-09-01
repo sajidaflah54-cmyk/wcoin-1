@@ -1,53 +1,113 @@
-import time as t, requests as r
-from concurrent.futures import ThreadPoolExecutor as e, as_completed as c
+import time as t
+import requests as r
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-a="https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
-b=1000
-c1=300
-d=10
-e1=7
-f=100000000
+# API endpoints
+API_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
+BALANCE_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/get-balance"  # change if needed
+TASK_ID = 528
 
-g=input("📥 Please enter your x-init-data:\n> ").strip()
+# Config
+START_WORKERS = 20          # initial requests per batch
+MAX_WORKERS = 200           # upper safety cap
+BATCHES_PER_ROUND = 2       # how many batches in parallel per round
+WAIT_BETWEEN_ROUNDS = 3     # seconds between rounds
+BALANCE_LIMIT = 100000
 
-def h():
-    return 1000
+# Input once
+X_INIT_DATA = input("📥 Please enter your x-init-data:\n> ").strip()
 
-def i():
-    x=int(t.time())
-    y={"taskId":b,"taskContents":{"viewedTimes":1,"lastViewed":x}}
-    z={
-        "Content-Type":"application/json",
-        "accept":"*/*",
-        "origin":"https://app.w-coin.io",
-        "referer":"https://app.w-coin.io/",
-        "user-agent":"Mozilla/5.0 (Linux; Android 13; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
-        "x-init-data":g,
-        "x-request-timestamp":str(x)
-    }
+# Session (reuse connection for speed)
+session = r.Session()
+session.headers.update({
+    "Content-Type": "application/json",
+    "accept": "*/*",
+    "origin": "https://app.w-coin.io",
+    "referer": "https://app.w-coin.io/",
+    "user-agent": "Mozilla/5.0 (Linux; Android 13; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+    "x-init-data": X_INIT_DATA
+})
+
+def get_balance():
+    """Fetch balance from API (replace if your balance endpoint differs)."""
     try:
-        res=r.post(a,headers=z,json=y,timeout=5)
-        print(f"[{x}] Status: {res.status_code} | {res.text}")
+        res = session.get(BALANCE_URL, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("balance", 0)
+        else:
+            print(f"Balance check failed: {res.status_code}")
+            return 0
     except Exception as ex:
-        print(f"Request error: {ex}")
+        print(f"Balance check error: {ex}")
+        return 0
 
-def j(k):
-    print(f"  >> Starting batch {k}")
-    with e(max_workers=c1) as ex:
-        futures=[ex.submit(i) for _ in range(c1)]
-        for _ in c(futures): pass
-    print(f"  >> Finished batch {k}")
+def send_request():
+    """Send a single request with retries."""
+    ts = int(t.time())
+    payload = {"taskId": TASK_ID, "taskContents": {"viewedTimes": 1, "lastViewed": ts}}
+    headers = {"x-request-timestamp": str(ts)}
+
+    for attempt in range(3):
+        try:
+            res = session.post(API_URL, json=payload, headers=headers, timeout=5)
+            if res.status_code == 200:
+                return True, res.text
+            else:
+                return False, res.text
+        except Exception as ex:
+            if attempt == 2:
+                return False, str(ex)
+            t.sleep(1)  # backoff
+
+def run_batch(batch_id, workers):
+    """Run one batch of requests."""
+    print(f"  >> Starting batch {batch_id} with {workers} workers")
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(send_request) for _ in range(workers)]
+        for fut in as_completed(futures):
+            results.append(fut.result())
+
+    success = sum(1 for ok, _ in results if ok)
+    failed = len(results) - success
+    print(f"  >> Finished batch {batch_id}: {success} success, {failed} failed")
+    return success, failed
+
+# Main loop
+current_workers = START_WORKERS
 
 while True:
-    l=h()
-    if l>=f:
-        print(f"Balance limit reached ({l} >= {f}), stopping.")
+    balance = get_balance()
+    if balance >= BALANCE_LIMIT:
+        print(f"Balance limit reached ({balance} >= {BALANCE_LIMIT}), stopping.")
         break
-    print(f"\n=== New round: {d} batches of {c1} requests ===")
-    m=t.time()
-    with e(max_workers=d) as ex:
-        futures=[ex.submit(j,i+1) for i in range(d)]
-        for _ in c(futures): pass
-    print(f"=== Round completed in {t.time()-m:.2f} seconds ===")
-    print(f"Waiting {e1} seconds before next round...\n")
-    t.sleep(e1)
+
+    print(f"\n=== New round: {BATCHES_PER_ROUND} batches of {current_workers} requests ===")
+    start = t.time()
+
+    total_success, total_failed = 0, 0
+    with ThreadPoolExecutor(max_workers=BATCHES_PER_ROUND) as executor:
+        futures = [executor.submit(run_batch, i + 1, current_workers) for i in range(BATCHES_PER_ROUND)]
+        for fut in as_completed(futures):
+            s, f = fut.result()
+            total_success += s
+            total_failed += f
+
+    round_time = t.time() - start
+    balance_after = get_balance()
+
+    success_rate = total_success / max(1, (total_success + total_failed)) * 100
+    print(f"=== Round done in {round_time:.2f}s | Success rate: {success_rate:.1f}% | "
+          f"Balance now: {balance_after} ===")
+
+    # Auto-tune logic
+    if success_rate > 90 and current_workers < MAX_WORKERS:
+        current_workers += 10
+        print(f"✅ Increasing workers to {current_workers} (high success rate)")
+    elif success_rate < 60 and current_workers > 10:
+        current_workers = max(10, current_workers - 10)
+        print(f"⚠️ Decreasing workers to {current_workers} (too many failures)")
+
+    print(f"Waiting {WAIT_BETWEEN_ROUNDS} seconds before next round...\n")
+    t.sleep(WAIT_BETWEEN_ROUNDS)
