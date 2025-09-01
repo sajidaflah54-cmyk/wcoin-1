@@ -12,7 +12,7 @@ START_WORKERS = 20          # initial requests per batch
 MAX_WORKERS = 200           # upper safety cap
 BATCHES_PER_ROUND = 2       # how many batches in parallel per round
 WAIT_BETWEEN_ROUNDS = 3     # seconds between rounds
-BALANCE_LIMIT = 100000
+BALANCE_LIMIT = 10000000
 
 # Input once
 X_INIT_DATA = input("📥 Please enter your x-init-data:\n> ").strip()
