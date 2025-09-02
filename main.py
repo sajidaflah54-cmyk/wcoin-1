@@ -1,78 +1,12 @@
-import time as t
-import requests as r
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# API endpoints
-API_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
-BALANCE_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/get-balance"  # change if needed
-TASK_ID = 528
-
 # Config
-START_WORKERS = 20          # initial requests per batch
-MAX_WORKERS = 200           # upper safety cap
-BATCHES_PER_ROUND = 2       # how many batches in parallel per round
-WAIT_BETWEEN_ROUNDS = 3     # seconds between rounds
+START_WORKERS = 100       # start big
+MAX_WORKERS = 500         # allow higher scaling
+MIN_WORKERS = 50          # don't go below this
+BATCHES_PER_ROUND = 3
+WAIT_BETWEEN_ROUNDS = 2
 BALANCE_LIMIT = 10000000
 
-# Input once
-X_INIT_DATA = input("📥 Please enter your x-init-data:\n> ").strip()
-
-# Session (reuse connection for speed)
-session = r.Session()
-session.headers.update({
-    "Content-Type": "application/json",
-    "accept": "*/*",
-    "origin": "https://app.w-coin.io",
-    "referer": "https://app.w-coin.io/",
-    "user-agent": "Mozilla/5.0 (Linux; Android 13; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
-    "x-init-data": X_INIT_DATA
-})
-
-def get_balance():
-    """Fetch balance from API (replace if your balance endpoint differs)."""
-    try:
-        res = session.get(BALANCE_URL, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            return data.get("balance", 0)
-        else:
-            print(f"Balance check failed: {res.status_code}")
-            return 0
-    except Exception as ex:
-        print(f"Balance check error: {ex}")
-        return 0
-
-def send_request():
-    """Send a single request with retries."""
-    ts = int(t.time())
-    payload = {"taskId": TASK_ID, "taskContents": {"viewedTimes": 1, "lastViewed": ts}}
-    headers = {"x-request-timestamp": str(ts)}
-
-    for attempt in range(3):
-        try:
-            res = session.post(API_URL, json=payload, headers=headers, timeout=5)
-            if res.status_code == 200:
-                return True, res.text
-            else:
-                return False, res.text
-        except Exception as ex:
-            if attempt == 2:
-                return False, str(ex)
-            t.sleep(1)  # backoff
-
-def run_batch(batch_id, workers):
-    """Run one batch of requests."""
-    print(f"  >> Starting batch {batch_id} with {workers} workers")
-    results = []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(send_request) for _ in range(workers)]
-        for fut in as_completed(futures):
-            results.append(fut.result())
-
-    success = sum(1 for ok, _ in results if ok)
-    failed = len(results) - success
-    print(f"  >> Finished batch {batch_id}: {success} success, {failed} failed")
-    return success, failed
+...
 
 # Main loop
 current_workers = START_WORKERS
@@ -101,13 +35,13 @@ while True:
     print(f"=== Round done in {round_time:.2f}s | Success rate: {success_rate:.1f}% | "
           f"Balance now: {balance_after} ===")
 
-    # Auto-tune logic
-    if success_rate > 90 and current_workers < MAX_WORKERS:
-        current_workers += 10
-        print(f"✅ Increasing workers to {current_workers} (high success rate)")
-    elif success_rate < 60 and current_workers > 10:
-        current_workers = max(10, current_workers - 10)
-        print(f"⚠️ Decreasing workers to {current_workers} (too many failures)")
+    # Auto-tuning
+    if success_rate > 90 and round_time < 6 and current_workers < MAX_WORKERS:
+        current_workers += 50   # scale up faster
+        print(f"✅ Increasing workers to {current_workers}")
+    elif success_rate < 60 or round_time > 15:
+        current_workers = max(MIN_WORKERS, current_workers - 50)  # drop sharply
+        print(f"⚠️ Decreasing workers to {current_workers}")
 
     print(f"Waiting {WAIT_BETWEEN_ROUNDS} seconds before next round...\n")
     t.sleep(WAIT_BETWEEN_ROUNDS)
