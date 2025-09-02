@@ -1,105 +1,79 @@
-# main_termux.py
-import time as t
-import requests as r
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+import aiohttp
+import time
+import random
 
-# --- Configuration ---
-START_WORKERS = 100
-MAX_WORKERS = 500
-MIN_WORKERS = 50
-BATCHES_PER_ROUND = 3
-WAIT_BETWEEN_ROUNDS = 2
-BALANCE_LIMIT = 10000000
-NUM_REQUESTS_PER_BATCH = 100  # placeholder
+API_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-tas>
+TASK_ID = 528
+TIMEOUT = 10
+REQUESTS_PER_BATCH = 300
+PAUSE_AFTER_BATCH = 10  # seconds
+MAX_RETRIES = 5
 
-# --- Placeholder Functions ---
-def get_balance():
-    try:
-        with open('balance.txt', 'r') as f:
-            balance = int(f.read())
-    except (FileNotFoundError, ValueError):
-        balance = 0
+# --- 10 X-INIT-DATA input ---
+X_INIT_DATA_LIST = []
+for i in range(10):
+    data = input(f"📥 Enter x-init-data for account {i+1}:\n> ").strip()
+    if data:
+        X_INIT_DATA_LIST.append(data)
 
-    # Simulate a balance increase
-    balance += 1000
-    with open('balance.txt', 'w') as f:
-        f.write(str(balance))
-    return balance
+USER_AGENTS = [
+    # same list (not removed)
+    "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chr>
+    # ...
+    "Mozilla/5.0 (Linux; Android 12; Meizu 18) AppleWebKit/537.36 (KHTML, like Gecko) Chr>
+]
 
-def fetch_x_init_data():
-    """
-    Placeholder function for fetching x init data from Telegram mini app.
-    Replace this with your actual logic.
-    """
-    try:
-        # Example: send a GET request to fetch data
-        # response = r.get("YOUR_X_INIT_URL", timeout=10)
-        # data = response.json()
-        # return data
-        t.sleep(0.1)  # simulate network delay
-        return {"x_init": "data"}
-    except Exception:
-        return None
+async def send_task(session, task_id, x_init):
+    for attempt in range(MAX_RETRIES):
+        t = int(time.time())
+        data = {"taskId": task_id, "taskContents": {"viewedTimes": 1, "lastViewed": t}}
+        headers = {
+            "Content-Type": "application/json",
+            "accept": "*/*",
+            "origin": "https://app.w-coin.io",
+            "referer": "https://app.w-coin.io/",
+            "user-agent": random.choice(USER_AGENTS),
+            "x-init-data": x_init,  # fixed to this account
+            "x-request-timestamp": str(t)
+        }
 
-def run_batch(batch_number, num_requests):
-    print(f"  - Running batch {batch_number} with {num_requests} requests...")
-    successes, failures = 0, 0
-
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(single_request) for _ in range(num_requests)]
-        for fut in as_completed(futures):
-            if fut.result():
-                successes += 1
-            else:
-                failures += 1
-
-    return successes, failures
-
-def single_request():
-    """
-    Placeholder for a single request using x_init_data.
-    Replace with your actual API or Telegram mini app logic.
-    """
-    x_data = fetch_x_init_data()
-    if x_data:
-        t.sleep(0.05)  # simulate processing
-        return True
+        try:
+            async with session.post(API_URL, headers=headers, json=data, timeout=TIMEOUT)>
+                text = await r.text()
+                if r.status == 200:
+                    print(f"[{task_id}] ✅ {x_init[:10]}.. | {text[:80]}")
+                    return True
+                else:
+                    print(f"[{task_id}] ❌ {x_init[:10]}.. | {r.status} | {text[:80]}")
+        except asyncio.TimeoutError:
+            print(f"[{task_id}] Timeout ({x_init[:10]}) - retrying...")
+        except aiohttp.ClientError as e:
+            print(f"[{task_id}] Conn error ({x_init[:10]}) - {e}")
+        await asyncio.sleep(random.uniform(0.1, 0.5))
     return False
 
-# --- Main Loop ---
-current_workers = START_WORKERS
+async def run_batch(session, batch_num):
+    print(f"\n🚀 Starting batch {batch_num} ({REQUESTS_PER_BATCH} requests)...")
+    per_account = max(1, REQUESTS_PER_BATCH // len(X_INIT_DATA_LIST))  # divide requests >
+    tasks = []
+    for x_init in X_INIT_DATA_LIST:
+        for _ in range(per_account):
+            tasks.append(asyncio.create_task(send_task(session, TASK_ID, x_init)))
+    await asyncio.gather(*tasks)
+    print(f"⏸️ Batch {batch_num} complete, pausing for {PAUSE_AFTER_BATCH}s...\n")
+    await asyncio.sleep(PAUSE_AFTER_BATCH)
 
-while True:
-    balance = get_balance()
-    if balance >= BALANCE_LIMIT:
-        print(f"Balance limit reached ({balance} >= {BALANCE_LIMIT}), stopping.")
-        break
+async def main():
+    print(f"🚀 Starting continuous verification for Task ID {TASK_ID}...\n")
+    async with aiohttp.ClientSession() as session:
+        batch_num = 1
+        while True:
+            await run_batch(session, batch_num)
+            batch_num += 1
 
-    print(f"\n=== New round: {BATCHES_PER_ROUND} batches of {current_workers} requests ===")
-    start = t.time()
-
-    total_success, total_failed = 0, 0
-    with ThreadPoolExecutor(max_workers=BATCHES_PER_ROUND) as executor:
-        futures = [executor.submit(run_batch, i + 1, current_workers) for i in range(BATCHES_PER_ROUND)]
-        for fut in as_completed(futures):
-            s, f = fut.result()
-            total_success += s
-            total_failed += f
-
-    round_time = t.time() - start
-    balance_after = get_balance()
-    success_rate = total_success / max(1, (total_success + total_failed)) * 100
-
-    print(f"=== Round done in {round_time:.2f}s | Success rate: {success_rate:.1f}% | "
-          f"Balance now: {balance_after} ===")
-
-    # --- Auto-tuning Logic ---
-    if success_rate > 90 and round_time < 6 and current_workers < MAX_WORKERS:
-        current_workers += 50
-        print(f"✅ Increasing workers to {current_workers}")
-    elif success_rate < 60 or round_time > 15:
-        current_workers = max(MIN_WORKERS, current_workers - 50)
-        print(f"⚠️ Decreasing workers to {current_workers}")
-
-    print(f"Waiting {WAIT_BETWEEN_ROUNDS} seconds before next round...\n")
-    t.sleep(WAIT_BETWEEN_ROUNDS)
+if name == "main":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n📝 Stopped by user.")
