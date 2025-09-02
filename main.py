@@ -2,115 +2,80 @@ import asyncio
 import aiohttp
 import time
 import random
-import json
 
+# --- Config ---
 API_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
 TASK_ID = 528
-TIMEOUT = 8
-REQUESTS_PER_BATCH = 300        # Safer than 400
-PAUSE_AFTER_BATCH = 8           # Slightly longer pause
-MAX_RETRIES = 7
-CONCURRENCY_LIMIT = 100         # Start lower to avoid instant blocking
+TIMEOUT = 15
+REQUESTS_PER_BATCH = 100000   # Huge batch size
+MAX_BATCHES = 7               # Run up to 7 batches
+CONCURRENCY_LIMIT = 500       # How many requests at once
+MAX_RETRIES = 7               # Retry attempts
+BATCH_DELAY = 10              # Delay (sec) between batches
 
-# Input x-init-data
-X_INIT_DATA_LIST = []
-for i in range(10):
-    data = input(f"📥 Enter x-init-data for account {i+1}:\n> ").strip()
-    if data:
-        X_INIT_DATA_LIST.append(data)
+# --- Ask for x-init-data ---
+X_INIT_DATA = input("Paste your x-init-data: ").strip()
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; Meizu 18) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; Redmi Note 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0 Mobile Safari/537.36",
-]
 
-semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-
-async def send_task(session, task_id, x_init):
+async def send_request(session, payload, attempt=1):
     """
-    Sends a verification task with retries, backoff, and error handling.
+    Sends a single request with retries & exponential backoff.
     """
-    for attempt in range(MAX_RETRIES):
-        async with semaphore:
-            t = int(time.time())
-            data = {"taskId": task_id, "taskContents": {"viewedTimes": 1, "lastViewed": t}}
-            headers = {
-                "Content-Type": "application/json",
-                "accept": "*/*",
-                "origin": "https://app.w-coin.io",
-                "referer": "https://app.w-coin.io/",
-                "user-agent": random.choice(USER_AGENTS),
-                "x-init-data": x_init,
-                "x-request-timestamp": str(t)
-            }
+    headers = {
+        "Content-Type": "application/json",
+        "x-init-data": X_INIT_DATA
+    }
 
-            try:
-                async with session.post(API_URL, headers=headers, json=data, timeout=TIMEOUT) as r:
-                    text = await r.text()
+    try:
+        async with session.post(API_URL, json=payload, headers=headers, timeout=TIMEOUT) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            else:
+                return {"error": f"HTTP {resp.status}"}
+    except Exception as e:
+        if attempt < MAX_RETRIES:
+            wait_time = 2 ** attempt + random.uniform(0, 1)
+            await asyncio.sleep(wait_time)
+            return await send_request(session, payload, attempt + 1)
+        return {"error": str(e)}
 
-                    if r.status == 200:
-                        try:
-                            js = json.loads(text)
-                            print(f"[{task_id}] ✅ {x_init[:10]}.. | {js}")
-                        except json.JSONDecodeError:
-                            print(f"[{task_id}] ⚠️ Non-JSON (possible Cloudflare) | Retrying...")
-                            await asyncio.sleep(random.uniform(1, 3))
-                            continue
-                        return True
 
-                    elif r.status in (429, 500, 502, 503, 520):
-                        wait_time = min(2 ** attempt + random.uniform(0, 2), 15)
-                        print(f"[{task_id}] ⚠️ Retry {attempt+1} ({r.status}) | Wait {wait_time:.1f}s")
-                        await asyncio.sleep(wait_time)
-                    
-                    else:
-                        print(f"[{task_id}] ❌ {x_init[:10]}.. | {r.status} | {text[:80]}")
-                        return False
-
-            except asyncio.TimeoutError:
-                print(f"[{task_id}] ⏱️ Timeout ({x_init[:10]}) - retrying...")
-            except aiohttp.ClientOSError as e:
-                print(f"[{task_id}] 🌐 Conn reset ({x_init[:10]}) - {e}")
-            except aiohttp.ClientError as e:
-                print(f"[{task_id}] 🌐 Client error ({x_init[:10]}) - {e}")
-
-            # jitter before retry
-            await asyncio.sleep(random.uniform(0.2, 1.0))
-
-    print(f"[{task_id}] ❌ Max retries exceeded ({x_init[:10]})")
-    return False
-
-async def run_batch(session, batch_num):
+async def run_batch(batch_num):
     """
-    Runs one batch of requests across all accounts.
+    Runs a single batch of requests.
     """
-    print(f"\n🚀 Starting batch {batch_num} ({REQUESTS_PER_BATCH} requests)...")
-    per_account = max(1, REQUESTS_PER_BATCH // len(X_INIT_DATA_LIST))
-    tasks = []
+    start_time = time.time()
+    connector = aiohttp.TCPConnector(limit=CONCURRENCY_LIMIT)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [
+            send_request(session, {"task_id": TASK_ID})
+            for _ in range(REQUESTS_PER_BATCH)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for x_init in X_INIT_DATA_LIST:
-        for _ in range(per_account):
-            tasks.append(asyncio.create_task(send_task(session, TASK_ID, x_init)))
+    success = sum(1 for r in results if isinstance(r, dict) and "error" not in r)
+    failed = REQUESTS_PER_BATCH - success
+    elapsed = time.time() - start_time
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    success = sum(1 for r in results if r is True)
-    print(f"✅ Batch {batch_num} finished. Success: {success}/{len(results)}")
-    print(f"⏸️ Pausing for {PAUSE_AFTER_BATCH}s...\n")
-    await asyncio.sleep(PAUSE_AFTER_BATCH)
+    print(f"\n--- Batch {batch_num} Finished ---")
+    print(f"Success: {success}, Failed: {failed}")
+    print(f"Time taken: {elapsed:.2f} sec")
+    return success, failed
+
 
 async def main():
-    print(f"🚀 Starting continuous verification for Task ID {TASK_ID}...\n")
-    connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300, ssl=False)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        batch_num = 1
-        while True:
-            await run_batch(session, batch_num)
-            batch_num += 1
+    total_success, total_failed = 0, 0
+    for batch_num in range(1, MAX_BATCHES + 1):
+        success, failed = await run_batch(batch_num)
+        total_success += success
+        total_failed += failed
+        if batch_num < MAX_BATCHES:
+            print(f"Waiting {BATCH_DELAY} sec before next batch...")
+            await asyncio.sleep(BATCH_DELAY)
+
+    print("\n=== All Batches Completed ===")
+    print(f"Total Success: {total_success}, Total Failed: {total_failed}")
+
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n📝 Stopped by user.")
+    asyncio.run(main())
