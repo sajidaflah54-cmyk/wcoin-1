@@ -2,23 +2,16 @@ import asyncio
 import aiohttp
 import time
 import random
-import sys
-import os
-import csv
-from datetime import datetime
 
 API_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
+
 TASK_ID = 528
+TIMEOUT = 8
+REQUESTS_PER_BATCH = 400   # Increased for faster balance gain
+PAUSE_AFTER_BATCH = 6      # Shorter pause between batches
+MAX_RETRIES = 7
+CONCURRENCY_LIMIT = 200    # Prevent overload
 
-# --- CONFIG (faster but still moderate) ---
-TIMEOUT = 4            # shorter wait before giving up on a request
-BASE_REQUESTS = 700    # start slightly bigger than before
-MAX_REQUESTS = 1500    # allow larger bursts if the server copes
-CONCURRENCY_LIMIT = 500  # how many requests run at once
-MAX_RETRIES = 6
-PAUSE_AFTER_BATCH = 2  # quick pause before the next batch
-
-# --- ACCOUNT INPUT ---
 X_INIT_DATA_LIST = []
 for i in range(10):
     data = input(f"📥 Enter x-init-data for account {i+1}:\n> ").strip()
@@ -32,39 +25,9 @@ USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 11; Redmi Note 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0 Mobile Safari/537.36",
 ]
 
-# --- GLOBAL STATE ---
 semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-success_count = 0
-fail_count = 0
-
-# --- COLORS ---
-RESET = "\033[0m"
-GREEN = "\033[92m"
-RED = "\033[91m"
-YELLOW = "\033[93m"
-CYAN = "\033[96m"
-
-# --- LOGGING SETUP ---
-os.makedirs("logs", exist_ok=True)
-txt_log_path = os.path.join("logs", "session_log.txt")
-csv_log_path = os.path.join("logs", "session_log.csv")
-
-csv_file = open(csv_log_path, "a", newline="", encoding="utf-8")
-csv_writer = csv.writer(csv_file)
-if os.stat(csv_log_path).st_size == 0:  # write header if file empty
-    csv_writer.writerow(["timestamp", "account", "status_code", "result", "response"])
-
-def log_success(account, status, response):
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    snippet = response[:80].replace("\n", " ")
-    line = f"[{timestamp}] {account[:10]}.. | {status} | SUCCESS | {snippet}\n"
-    with open(txt_log_path, "a", encoding="utf-8") as f:
-        f.write(line)
-    csv_writer.writerow([timestamp, account[:10], status, "SUCCESS", snippet])
-    csv_file.flush()
 
 async def send_task(session, task_id, x_init):
-    global success_count, fail_count
     for attempt in range(MAX_RETRIES):
         async with semaphore:
             t = int(time.time())
@@ -82,56 +45,44 @@ async def send_task(session, task_id, x_init):
                 async with session.post(API_URL, headers=headers, json=data, timeout=TIMEOUT) as r:
                     text = await r.text()
                     if r.status == 200:
-                        success_count += 1
-                        print(f"{GREEN}[OK]{RESET} {x_init[:10]}.. | {text[:60]}")
-                        log_success(x_init, r.status, text)
+                        print(f"[{task_id}] ✅ {x_init[:10]}.. | {text[:80]}")
                         return True
-                    elif r.status in (429, 500, 502, 503):
+                    elif r.status in (429, 500, 502, 503):  # Rate limit or server error
                         wait_time = min(2 ** attempt, 10)
-                        print(f"{YELLOW}[RETRY]{RESET} {x_init[:10]}.. | {r.status} | Waiting {wait_time}s")
+                        print(f"[{task_id}] ⚠️ Retry {attempt+1} ({r.status}) | Waiting {wait_time}s")
                         await asyncio.sleep(wait_time)
                     else:
-                        fail_count += 1
-                        print(f"{RED}[FAIL]{RESET} {x_init[:10]}.. | {r.status}")
+                        print(f"[{task_id}] ❌ {x_init[:10]}.. | {r.status} | {text[:80]}")
                         return False
             except asyncio.TimeoutError:
-                print(f"{YELLOW}[TIMEOUT]{RESET} {x_init[:10]} - retrying...")
+                print(f"[{task_id}] ⏱️ Timeout ({x_init[:10]}) - retrying...")
             except aiohttp.ClientError as e:
-                print(f"{RED}[NET]{RESET} {x_init[:10]} - {e}")
-            await asyncio.sleep(random.uniform(0.05, 0.15))
-    fail_count += 1
+                print(f"[{task_id}] 🌐 Conn error ({x_init[:10]}) - {e}")
+
+            await asyncio.sleep(random.uniform(0.05, 0.2))  # Small jitter
     return False
 
-async def run_batch(session, batch_num, requests_in_batch):
-    print(f"\n🚀 Batch {batch_num} | Sending {requests_in_batch} requests...\n")
-    per_account = max(1, requests_in_batch // len(X_INIT_DATA_LIST))
+async def run_batch(session, batch_num):
+    print(f"\n🚀 Starting batch {batch_num} ({REQUESTS_PER_BATCH} requests)...")
+    per_account = max(1, REQUESTS_PER_BATCH // len(X_INIT_DATA_LIST))
     tasks = []
     for x_init in X_INIT_DATA_LIST:
         for _ in range(per_account):
             tasks.append(asyncio.create_task(send_task(session, TASK_ID, x_init)))
     await asyncio.gather(*tasks)
-    print(f"\n⏸️ Batch {batch_num} complete | {GREEN}Success: {success_count}{RESET} | {RED}Fails: {fail_count}{RESET}")
+    print(f"⏸️ Batch {batch_num} complete, pausing for {PAUSE_AFTER_BATCH}s...\n")
     await asyncio.sleep(PAUSE_AFTER_BATCH)
 
 async def main():
-    print(f"{CYAN}🚀 Premium Auto-Verification Bot Started for Task {TASK_ID}{RESET}\n")
-    requests_in_batch = BASE_REQUESTS
+    print(f"🚀 Starting continuous verification for Task ID {TASK_ID}...\n")
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=0)) as session:
         batch_num = 1
         while True:
-            await run_batch(session, batch_num, requests_in_batch)
-            if success_count > fail_count * 2 and requests_in_batch < MAX_REQUESTS:
-                requests_in_batch += 100
-                print(f"{CYAN}⚡ Increasing load -> {requests_in_batch} requests next batch{RESET}")
-            elif fail_count > success_count and requests_in_batch > BASE_REQUESTS:
-                requests_in_batch -= 100
-                print(f"{YELLOW}⚠️ Reducing load -> {requests_in_batch} requests next batch{RESET}")
+            await run_batch(session, batch_num)
             batch_num += 1
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print(f"\n📝 Stopped by user. {GREEN}Success: {success_count}{RESET} | {RED}Fails: {fail_count}{RESET}")
-        csv_file.close()
-        sys.exit()
+        print("\n📝 Stopped by user.")
