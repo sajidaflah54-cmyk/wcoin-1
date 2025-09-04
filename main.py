@@ -10,13 +10,13 @@ from datetime import datetime
 API_URL = "https://starfish-app-fknmx.ondigitalocean.app/wapi/api/external-api/verify-task"
 TASK_ID = 528
 
-# --- CONFIG ---
-TIMEOUT = 6
-BASE_REQUESTS = 500
-MAX_REQUESTS = 1200
-CONCURRENCY_LIMIT = 300
+# --- CONFIG (2x faster) ---
+TIMEOUT = 4             # shorter wait before giving up on a request
+BASE_REQUESTS = 1000    # double initial batch size
+MAX_REQUESTS = 19999     # double max bursts
+CONCURRENCY_LIMIT = 600 # double parallel requests
 MAX_RETRIES = 6
-PAUSE_AFTER_BATCH = 4
+PAUSE_AFTER_BATCH = 1   # shorter pause between batches
 
 # --- ACCOUNT INPUT ---
 X_INIT_DATA_LIST = []
@@ -58,12 +58,8 @@ def log_event(account, status, result, response):
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     snippet = response[:80].replace("\n", " ")
     line = f"[{timestamp}] {account[:10]}.. | {status} | {result} | {snippet}\n"
-
-    # TXT log
     with open(txt_log_path, "a", encoding="utf-8") as f:
         f.write(line)
-
-    # CSV log
     csv_writer.writerow([timestamp, account[:10], status, result, snippet])
     csv_file.flush()
 
