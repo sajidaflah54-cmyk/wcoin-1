@@ -13,8 +13,9 @@ TASK_ID = 528
 # --- CONFIG (2x faster) ---
 TIMEOUT = 4             # shorter wait before giving up on a request
 BASE_REQUESTS = 1000    # double initial batch size
-MAX_REQUESTS = 19999     # double max bursts
-CONCURRENCY_LIMIT = 600 # double parallel requests
+MAX_REQUESTS = 19888888
+999  # double max bursts
+CONCURRENCY_LIMIT = 60 # double parallel requests
 MAX_RETRIES = 6
 PAUSE_AFTER_BATCH = 1   # shorter pause between batches
 
